@@ -22,28 +22,164 @@ jobs:
       matrix:
         include:
           - scala_version: "2.12.15"
-            spark_version: "3.3.4"
+            # there is no spark:3.3.4-scala Docker image released
+            spark_version: "3.3.3"
+            java_version: "11"
           - scala_version: "2.12.18"
             spark_version: "3.5.5"
+            java_version: "17"
 
           - scala_version: "2.13.8"
-            spark_version: "3.3.4"
+            # there is no spark:3.3.4-scala Docker image released
+            spark_version: "3.3.3"
+            java_version: "11"
           - scala_version: "2.13.8"
             spark_version: "3.5.5"
+            java_version: "17"
           - scala_version: "2.13.8"
             spark_version: "4.1.0-SNAPSHOT"
+            java_version: "17"
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Restore Maven packages cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-mvn-build-${{ matrix.spark_version }}-${{ matrix.scala_version }}-${{ hashFiles('pom.xml') }}
+          restore-keys:
+            ${{ runner.os }}-mvn-build-${{ matrix.spark_version }}-${{ matrix.scala_version }}-${{ hashFiles('pom.xml') }}
+            ${{ runner.os }}-mvn-build-${{ matrix.spark_version }}-${{ matrix.scala_version }}-
       - name: Setup JDK
         uses: actions/setup-java@v4
         with:
-          java-version: 17
+          java-version: ${{ matrix.java_version }}
           distribution: 'zulu'
+
       - name: Set Spark and Scala versions
         run: |
           ./scripts/set-version.sh "${{ matrix.spark_version }}" "${{ matrix.scala_version }}"
           git diff
-      - name: Build
-        run: mvn install
+      - name: Fetch mvn dependencies
+        continue-on-error: true
+        run: mvn --batch-mode dependency:go-offline
+      - name: Build package
+        run: mvn --batch-mode install
+
+      - name: Build image
+        if: ( ! contains(matrix.spark_version, '-SNAPSHOT') )
+        env:
+          JAVA_VERSION: ${{ matrix.java_version }}
+        run: ./scripts/createImage.sh
+
+  e2e:
+    name: End-to-end test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - scala_version: "2.12.15"
+            # there is no spark:3.3.4-scala Docker image released
+            spark_version: "3.3.3"
+            java_version: "11"
+          - scala_version: "2.12.18"
+            spark_version: "3.5.5"
+            java_version: "17"
+
+          - scala_version: "2.13.8"
+            # there is no spark:3.3.4-scala Docker image released
+            spark_version: "3.3.3"
+            java_version: "11"
+          - scala_version: "2.13.8"
+            spark_version: "3.5.5"
+            java_version: "17"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          path: armada-spark
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          repository: armadaproject/armada-operator
+          path: armada-operator
+
+      - name: Restore Maven packages cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-mvn-e2e-${{ matrix.spark_version }}-${{ matrix.scala_version }}-${{ hashFiles('pom.xml') }}
+          restore-keys:
+            ${{ runner.os }}-mvn-e2e-${{ matrix.spark_version }}-${{ matrix.scala_version }}-${{ hashFiles('pom.xml') }}
+            ${{ runner.os }}-mvn-e2e-${{ matrix.spark_version }}-${{ matrix.scala_version }}-
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ matrix.java_version }}
+          distribution: 'zulu'
+      - name: Setup Go
+        id: setup-go
+        uses: ./armada-operator/.github/actions/setup-go-cache
+        with:
+          cache-prefix: go-e2e
+
+      - name: Set Spark and Scala versions
+        working-directory: armada-spark
+        run: |
+          ./scripts/set-version.sh "${{ matrix.spark_version }}" "${{ matrix.scala_version }}"
+          git diff
+      - name: Fetch mvn dependencies
+        continue-on-error: true
+        working-directory: armada-spark
+        run: mvn --batch-mode dependency:go-offline
+      - name: Build package
+        working-directory: armada-spark
+        run: mvn package
+      - name: Build image
+        env:
+          JAVA_VERSION: ${{ matrix.java_version }}
+        run: ./armada-spark/scripts/createImage.sh
+
+      - name: Start Armada Kind cluster
+        id: kind
+        working-directory: armada-operator
+        run: |
+          make kind-all
+          echo "$PWD/bin/app/" >> "$GITHUB_PATH"
+          echo "$PWD/bin/tooling/" >> "$GITHUB_PATH"
+      - name: Create Armada queue
+        run: until armadactl create queue test; do sleep 1; echo; done; sleep 10
+      - name: Submit SparkPi
+        run: ./armada-spark/scripts/submitSparkPi.sh
+      - name: Watch job
+        timeout-minutes: 5
+        run: |
+          for i in {1..60}; do
+            armadactl watch test driver
+            sleep 1
+            echo
+          done
+      - name: Inspect k8s pods
+        id: k8s-pods
+        if: always() && steps.kind.outcome == 'success'
+        run: |
+          # Inspect k8s pods
+          echo "::group::pods"
+          kubectl get pods -A
+          echo "::endgroup::"
+
+          kubectl get pods -A | tail -n+2 | sed -E -e "s/ +/ /g" | cut -d " " -f 1-2 | while read namespace pod
+          do
+            echo "::group::$pod"
+            kubectl logs "$pod" --namespace "$namespace" | tee "$pod.log"
+            echo "::endgroup::"
+          done
+      - name: Upload logs
+        if: always() && steps.k8s-pods.outcome != 'skipped'
+        uses: actions/upload-artifact@v4
+        with:
+          name: k8s-logs-${{ matrix.spark_version }}-${{ matrix.scala_version }}
+          path: "*.log"
