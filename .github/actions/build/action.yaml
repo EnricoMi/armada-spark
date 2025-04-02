@@ -1,0 +1,51 @@
+name: Build
+author: EnricoMi
+description: Github Action to build this project against a Spark and Scala version
+
+inputs:
+  spark_version:
+    description: Spark version to build against, e.g. "3.5.5" or "4.1.0-SNAPSHOT"
+    required: true
+  scala_version:
+    description: Scala version to build with, e.g. "2.13.8"
+    required: true
+  java_version:
+    description: Java version to build with, e.g. "11"
+    required: true
+
+runs:
+  using: composite
+  steps:
+  - name: Restore Maven packages cache
+    uses: actions/cache@v4
+    with:
+      path: ~/.m2/repository
+      key: ${{ runner.os }}-mvn-build-${{ inputs.spark_version }}-${{ inputs.scala_version }}-${{ hashFiles('pom.xml') }}
+      restore-keys:
+        ${{ runner.os }}-mvn-build-${{ inputs.spark_version }}-${{ inputs.scala_version }}-${{ hashFiles('pom.xml') }}
+        ${{ runner.os }}-mvn-build-${{ inputs.spark_version }}-${{ inputs.scala_version }}-
+  - name: Setup JDK
+    uses: actions/setup-java@v4
+    with:
+      java-version: ${{ inputs.java_version }}
+      distribution: 'zulu'
+
+  - name: Set Spark and Scala versions
+    run: |
+      ./scripts/set-version.sh "${{ inputs.spark_version }}" "${{ inputs.scala_version }}"
+      git diff
+    shell: bash
+  - name: Fetch mvn dependencies
+    continue-on-error: true
+    run: mvn --batch-mode dependency:go-offline
+    shell: bash
+  - name: Build package
+    run: mvn --batch-mode install
+    shell: bash
+
+  - name: Build image
+    if: ( ! contains(inputs.spark_version, '-SNAPSHOT') )
+    env:
+      JAVA_VERSION: ${{ inputs.java_version }}
+    run: ./scripts/createImage.sh
+    shell: bash

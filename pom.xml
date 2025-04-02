@@ -38,6 +38,26 @@
         <spark.version>${spark.binary.version}.${spark.patch.version}</spark.version>
 
         <kubernetes-client.version>7.1.0</kubernetes-client.version>
+        <scalatest-maven-plugin.version>2.2.0</scalatest-maven-plugin.version>
+        <!-- SPARK-36796 for JDK-17 test-->
+        <extraJavaTestArgs>
+          -XX:+IgnoreUnrecognizedVMOptions
+          --add-opens=java.base/java.lang=ALL-UNNAMED
+          --add-opens=java.base/java.lang.invoke=ALL-UNNAMED
+          --add-opens=java.base/java.lang.reflect=ALL-UNNAMED
+          --add-opens=java.base/java.io=ALL-UNNAMED
+          --add-opens=java.base/java.net=ALL-UNNAMED
+          --add-opens=java.base/java.nio=ALL-UNNAMED
+          --add-opens=java.base/java.util=ALL-UNNAMED
+          --add-opens=java.base/java.util.concurrent=ALL-UNNAMED
+          --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED
+          --add-opens=java.base/jdk.internal.ref=ALL-UNNAMED
+          --add-opens=java.base/sun.nio.ch=ALL-UNNAMED
+          --add-opens=java.base/sun.nio.cs=ALL-UNNAMED
+          --add-opens=java.base/sun.security.action=ALL-UNNAMED
+          --add-opens=java.base/sun.util.calendar=ALL-UNNAMED
+          -Djdk.reflect.useDirectMethodHandle=false
+        </extraJavaTestArgs>
     </properties>
 
     <repositories>
@@ -105,12 +125,41 @@
             <artifactId>spark-core_${scala.binary.version}</artifactId>
             <version>${spark.version}</version>
             <scope>provided</scope>
+            <exclusions>
+                <!-- The Armada Scala client transitively depends on io.netty -->
+                <!-- Spark also depends on io.netty, so it might pull in versions that supersedes those Armada Scala dependencies -->
+                <!-- We need to exclude the Spark netty dependencies (which are scope provided), otherwise our shaded jar misses netty -->
+                <exclusion>
+                    <groupId>io.netty</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
 
         <dependency>
           <groupId>io.armadaproject</groupId>
           <artifactId>armada-scala-client_${scala.binary.version}</artifactId>
           <version>0.1.0-SNAPSHOT</version>
+        </dependency>
+
+        <!-- Test dependencies -->
+        <dependency>
+          <groupId>org.scalatest</groupId>
+          <artifactId>scalatest_${scala.binary.version}</artifactId>
+          <version>3.2.16</version>
+          <scope>test</scope>
+        </dependency>
+        <dependency>
+          <groupId>org.scalatestplus</groupId>
+          <artifactId>scalacheck-1-18_${scala.binary.version}</artifactId>
+          <version>3.2.19.0</version>
+          <scope>test</scope>
+        </dependency>
+        <dependency>
+          <groupId>org.scalatestplus</groupId>
+          <artifactId>mockito-5-12_${scala.binary.version}</artifactId>
+          <version>3.2.19.0</version>
+          <scope>test</scope>
         </dependency>
     </dependencies>
 
@@ -137,6 +186,7 @@
     <!-- Build Plugins -->
     <build>
         <plugins>
+            <!-- Include Spark version specific sources -->
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>build-helper-maven-plugin</artifactId>
@@ -156,7 +206,8 @@
                     </execution>
                 </executions>
             </plugin>
-            <!-- Compiler Plugin -->
+
+            <!-- Compiler Plugins -->
             <plugin>
                 <groupId>net.alchim31.maven</groupId>
                 <artifactId>scala-maven-plugin</artifactId>
@@ -183,18 +234,155 @@
                 </configuration>
             </plugin>
 
-            <!-- Jar Plugin (optional configuration) -->
+            <!-- Jar Plugin -->
             <plugin>
                 <artifactId>maven-jar-plugin</artifactId>
                 <version>3.4.2</version>
                 <configuration>
                     <archive>
                         <manifest>
-                            <!-- Optionally add entries like Implementation-Version, etc. -->
                             <addDefaultImplementationEntries>true</addDefaultImplementationEntries>
                         </manifest>
                     </archive>
                 </configuration>
+            </plugin>
+            <!-- Fatjar and dependency shading Plugin -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.6.0</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+                        <configuration>
+                            <minimizeJar>false</minimizeJar>
+                            <transformers>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer" />
+                            </transformers>
+                            <artifactSet>
+                                <includes>
+                                    <include>io.armadaproject:armada-scala-client_${scala.binary.version}</include>
+                                    <include>com.google.android:annotations</include>
+                                    <include>com.google.api.grpc:proto-google-common-protos</include>
+                                    <include>com.google.code.findbugs:jsr305</include>
+                                    <include>com.google.code.gson:gson</include>
+                                    <include>com.google.errorprone:error_prone_annotations</include>
+                                    <include>com.google.guava:*</include>
+                                    <include>com.google.j2objc:j2objc-annotations</include>
+                                    <include>com.google.protobuf:protobuf-java</include>
+                                    <include>com.thesamet.scalapb:*</include>
+                                    <include>io.grpc:*</include>
+                                    <include>io.netty:*</include>
+                                    <include>io.perfmark:perfmark-api</include>
+                                    <include>org.checkerframework:checker-qual</include>
+                                    <include>org.checkerframework:checker-compat-qual</include>
+                                    <include>org.codehaus.mojo:animal-sniffer-annotations</include>
+                                </includes>
+                            </artifactSet>
+                            <relocations>
+                                <relocation>
+                                    <pattern>android.</pattern>
+                                    <shadedPattern>io.armadaproject.shaded.android.</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>com.</pattern>
+                                    <shadedPattern>io.armadaproject.shaded.com.</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>google.</pattern>
+                                    <shadedPattern>io.armadaproject.shaded.google.</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>io.grpc.</pattern>
+                                    <shadedPattern>io.armadaproject.shaded.io.grpc.</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>io.netty.bootstrap.</pattern>
+                                    <shadedPattern>io.armadaproject.shaded.io.netty.bootstrap.</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>io.netty.buffer.</pattern>
+                                    <shadedPattern>io.armadaproject.shaded.io.netty.buffer.</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>io.netty.channel.</pattern>
+                                    <shadedPattern>io.armadaproject.shaded.io.netty.channel.</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>io.netty.handler.</pattern>
+                                    <shadedPattern>io.armadaproject.shaded.io.netty.handler.</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>io.netty.util.</pattern>
+                                    <shadedPattern>io.armadaproject.shaded.io.netty.util.</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>io.perfmark.</pattern>
+                                    <shadedPattern>io.armadaproject.shaded.io.perfmark.</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>javax.annotation.</pattern>
+                                    <shadedPattern>io.armadaproject.shaded.javax.annotation.</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.checkerframework.</pattern>
+                                    <shadedPattern>io.armadaproject.shaded.org.checkerframework.</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.codehaus.</pattern>
+                                    <shadedPattern>io.armadaproject.shaded.org.codehaus.</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>scalapb.</pattern>
+                                    <shadedPattern>io.armadaproject.shaded.scalapb.</shadedPattern>
+                                </relocation>
+                            </relocations>
+                            <filters>
+                                <filter>
+                                    <artifact>com.thesamet.scalapb:*</artifact>
+                                    <excludes>
+                                        <!-- armada-scala-client provides our own Scala protobuf classes -->
+                                        <exclude>com/google/protobuf/**</exclude>
+                                    </excludes>
+                                </filter>
+                                <filter>
+                                    <artifact>*:*</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/io.netty.versions.properties</exclude>
+                                        <exclude>META-INF/MANIFEST.MF</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
+                            <shadedArtifactAttached>true</shadedArtifactAttached>
+                            <shadedClassifierName>all</shadedClassifierName>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <!-- Scalatest runs all Scala tests -->
+            <plugin>
+              <groupId>org.scalatest</groupId>
+              <artifactId>scalatest-maven-plugin</artifactId>
+              <version>${scalatest-maven-plugin.version}</version>
+              <!-- Note config is repeated in surefire config -->
+              <configuration>
+                <reportsDirectory>${project.build.directory}/surefire-reports</reportsDirectory>
+                <junitxml>.</junitxml>
+                <filereports>SparkTestSuite.txt</filereports>
+                <argLine>-ea -Xmx4g -Xss4m -XX:MaxMetaspaceSize=2g ${extraJavaTestArgs} -Dio.netty.tryReflectionSetAccessible=true</argLine>
+                <stderr/>
+              </configuration>
+              <executions>
+                <execution>
+                  <id>test</id>
+                  <goals>
+                    <goal>test</goal>
+                  </goals>
+                </execution>
+              </executions>
             </plugin>
         </plugins>
     </build>
