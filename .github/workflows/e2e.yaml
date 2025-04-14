@@ -29,6 +29,14 @@ jobs:
 
     steps:
       - uses: gmij/max-build-space@6f167521f22dcb0da67695e16674c4ae5b964e34  # v0.4
+      - name: Move docker root path
+        run: |
+          sudo ls -lahd /var/lib/docker
+          sudo mkdir -p "${GITHUB_WORKSPACE}/docker"
+          docker info | grep "Docker Root Dir"
+          echo "{ \"data-root\": \"${GITHUB_WORKSPACE}/docker\" }" | sudo tee /etc/docker/daemon.json
+          sudo systemctl restart docker
+          docker info | grep "Docker Root Dir"
       - name: Checkout
         uses: actions/checkout@v4
       - name: E2E
