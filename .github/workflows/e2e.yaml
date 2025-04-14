@@ -31,7 +31,6 @@ jobs:
       - uses: gmij/max-build-space@6f167521f22dcb0da67695e16674c4ae5b964e34  # v0.4
         with:
           root-reserve-mb: 10240
-          build-mount-path: /var/lib/docker
       - name: Debug
         uses: mxschmitt/action-tmate@v3
       - name: Checkout
