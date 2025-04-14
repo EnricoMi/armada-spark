@@ -32,6 +32,8 @@ jobs:
         with:
           root-reserve-mb: 10240
           build-mount-path: /var/lib/docker
+      - name: Debug
+        uses: mxschmitt/action-tmate@v3
       - name: Checkout
         uses: actions/checkout@v4
       - name: E2E
