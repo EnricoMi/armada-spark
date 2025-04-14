@@ -28,6 +28,7 @@ jobs:
             java_version: "17"
 
     steps:
+      - uses: gmij/max-build-space@6f167521f22dcb0da67695e16674c4ae5b964e34  # v0.4
       - name: Checkout
         uses: actions/checkout@v4
       - name: E2E
