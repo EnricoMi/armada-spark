@@ -28,11 +28,18 @@ jobs:
             java_version: "17"
 
     steps:
+      - name: Create new docker root path
+        run: sudo mkdir -p "/docker"
       - uses: gmij/max-build-space@6f167521f22dcb0da67695e16674c4ae5b964e34  # v0.4
         with:
           root-reserve-mb: 10240
-      - name: Debug
-        uses: mxschmitt/action-tmate@v3
+          build-mount-path: /docker
+      - name: Move docker root path
+        run: |
+          docker info | grep "Docker Root Dir"
+          echo '{ "data-root": "/docker" }' | sudo tee /etc/docker/daemon.json
+          sudo systemctl restart docker
+          docker info | grep "Docker Root Dir"
       - name: Checkout
         uses: actions/checkout@v4
       - name: E2E
